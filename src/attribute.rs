@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: MIT
 
 use netlink_packet_core::{
-    DecodeError, DefaultNla, Emitable, ErrorContext, Nla, NlaBuffer,
-    NlasIterator, Parseable, emit_u32, emit_u32_be, emit_u64, emit_u64_be,
-    parse_u8, parse_u16, parse_u32, parse_u32_be, parse_u64, parse_u64_be,
+    DecodeError, DefaultNla, Emitable, EncodeError, EncodeErrorKind,
+    ErrorContext, Nla, NlaBuffer, NlasIterator, Parseable, append_bytes,
+    append_u32, append_u32_be, append_u64, append_u64_be, parse_u8, parse_u16,
+    parse_u32, parse_u32_be, parse_u64, parse_u64_be,
 };
 
 pub(crate) fn parse_attributes<T>(buf: &[u8]) -> Result<Vec<T>, DecodeError>
 where
-    T: for<'a> Parseable<NlaBuffer<&'a [u8]>>,
+    T: for<'a> Parseable<NlaBuffer<'a>>,
 {
     let mut attributes = Vec::new();
-    for nla in NlasIterator::new(buf) {
-        let nla = &nla.context("failed to parse macsec netlink attributes")?;
-        attributes.push(T::parse(nla)?);
+    for nla in NlasIterator::new(buf)? {
+        attributes.push(
+            T::parse(&nla)
+                .context("failed to parse macsec netlink attributes")?,
+        );
     }
     Ok(attributes)
 }
@@ -162,21 +165,6 @@ pub enum MacsecAttribute {
 }
 
 impl Nla for MacsecAttribute {
-    fn value_len(&self) -> usize {
-        match self {
-            Self::Ifindex(_) => 4,
-            Self::RxscConfig(attrs) => attrs.as_slice().buffer_len(),
-            Self::SaConfig(attrs) => attrs.as_slice().buffer_len(),
-            Self::Secy(attrs) => attrs.as_slice().buffer_len(),
-            Self::TxsaList(list) => list.as_slice().buffer_len(),
-            Self::RxscList(list) => list.as_slice().buffer_len(),
-            Self::TxscStats(attrs) => attrs.as_slice().buffer_len(),
-            Self::SecyStats(attrs) => attrs.as_slice().buffer_len(),
-            Self::Offload(attrs) => attrs.as_slice().buffer_len(),
-            Self::Other(nla) => nla.value_len(),
-        }
-    }
-
     fn kind(&self) -> u16 {
         match self {
             Self::Ifindex(_) => MACSEC_ATTR_IFINDEX,
@@ -192,26 +180,25 @@ impl Nla for MacsecAttribute {
         }
     }
 
-    fn emit_value(&self, buffer: &mut [u8]) {
+    fn emit_value(&self, out: &mut Vec<u8>) -> Result<(), EncodeError> {
         match self {
-            Self::Ifindex(value) => emit_u32(buffer, *value).unwrap(),
-            Self::RxscConfig(attrs) => attrs.as_slice().emit(buffer),
-            Self::SaConfig(attrs) => attrs.as_slice().emit(buffer),
-            Self::Secy(attrs) => attrs.as_slice().emit(buffer),
-            Self::TxsaList(list) => list.as_slice().emit(buffer),
-            Self::RxscList(list) => list.as_slice().emit(buffer),
-            Self::TxscStats(attrs) => attrs.as_slice().emit(buffer),
-            Self::SecyStats(attrs) => attrs.as_slice().emit(buffer),
-            Self::Offload(attrs) => attrs.as_slice().emit(buffer),
-            Self::Other(nla) => nla.emit_value(buffer),
+            Self::Ifindex(value) => append_u32(out, *value),
+            Self::RxscConfig(attrs) => attrs.as_slice().emit(out)?,
+            Self::SaConfig(attrs) => attrs.as_slice().emit(out)?,
+            Self::Secy(attrs) => attrs.as_slice().emit(out)?,
+            Self::TxsaList(list) => list.as_slice().emit(out)?,
+            Self::RxscList(list) => list.as_slice().emit(out)?,
+            Self::TxscStats(attrs) => attrs.as_slice().emit(out)?,
+            Self::SecyStats(attrs) => attrs.as_slice().emit(out)?,
+            Self::Offload(attrs) => attrs.as_slice().emit(out)?,
+            Self::Other(nla) => return nla.emit_value(out),
         }
+        Ok(())
     }
 }
 
-impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
-    for MacsecAttribute
-{
-    fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
+impl<'a> Parseable<NlaBuffer<'a>> for MacsecAttribute {
+    fn parse(buf: &NlaBuffer<'a>) -> Result<Self, DecodeError> {
         let payload = buf.value();
         Ok(match buf.kind() {
             MACSEC_ATTR_IFINDEX => Self::Ifindex(
@@ -260,16 +247,12 @@ impl MacsecSaList {
 }
 
 impl Nla for MacsecSaList {
-    fn value_len(&self) -> usize {
-        self.attributes.as_slice().buffer_len()
-    }
-
     fn kind(&self) -> u16 {
         self.kind
     }
 
-    fn emit_value(&self, buffer: &mut [u8]) {
-        self.attributes.as_slice().emit(buffer);
+    fn emit_value(&self, out: &mut Vec<u8>) -> Result<(), EncodeError> {
+        self.attributes.as_slice().emit(out)
     }
 }
 
@@ -287,16 +270,12 @@ impl MacsecRxscList {
 }
 
 impl Nla for MacsecRxscList {
-    fn value_len(&self) -> usize {
-        self.attributes.as_slice().buffer_len()
-    }
-
     fn kind(&self) -> u16 {
         self.kind
     }
 
-    fn emit_value(&self, buffer: &mut [u8]) {
-        self.attributes.as_slice().emit(buffer);
+    fn emit_value(&self, out: &mut Vec<u8>) -> Result<(), EncodeError> {
+        self.attributes.as_slice().emit(out)
     }
 }
 
@@ -304,8 +283,7 @@ fn parse_nested_sa_list(
     payload: &[u8],
 ) -> Result<Vec<MacsecSaList>, DecodeError> {
     let mut list = Vec::new();
-    for nla in NlasIterator::new(payload) {
-        let nla = &nla.context("failed to parse macsec SA list")?;
+    for nla in NlasIterator::new(payload)? {
         list.push(MacsecSaList {
             kind: nla.kind(),
             attributes: parse_attributes(nla.value())?,
@@ -318,8 +296,7 @@ fn parse_nested_rxsc_list(
     payload: &[u8],
 ) -> Result<Vec<MacsecRxscList>, DecodeError> {
     let mut list = Vec::new();
-    for nla in NlasIterator::new(payload) {
-        let nla = &nla.context("failed to parse macsec RXSC list")?;
+    for nla in NlasIterator::new(payload)? {
         list.push(MacsecRxscList {
             kind: nla.kind(),
             attributes: parse_attributes(nla.value())?,
@@ -364,25 +341,6 @@ pub enum MacsecSecyAttribute {
 }
 
 impl Nla for MacsecSecyAttribute {
-    fn value_len(&self) -> usize {
-        match self {
-            Self::Sci(_) | Self::CipherSuite(_) => 8,
-            Self::Window(_) => 4,
-            Self::EncodingSa(_)
-            | Self::IcvLen(_)
-            | Self::Protect(_)
-            | Self::Replay(_)
-            | Self::Oper(_)
-            | Self::Validate(_)
-            | Self::Encrypt(_)
-            | Self::IncSci(_)
-            | Self::Es(_)
-            | Self::Scb(_) => 1,
-            Self::Pad => 0,
-            Self::Other(nla) => nla.value_len(),
-        }
-    }
-
     fn kind(&self) -> u16 {
         match self {
             Self::Sci(_) => MACSEC_SECY_ATTR_SCI,
@@ -403,9 +361,9 @@ impl Nla for MacsecSecyAttribute {
         }
     }
 
-    fn emit_value(&self, buffer: &mut [u8]) {
+    fn emit_value(&self, out: &mut Vec<u8>) -> Result<(), EncodeError> {
         match self {
-            Self::Sci(value) => emit_u64_be(buffer, *value).unwrap(),
+            Self::Sci(value) => append_u64_be(out, *value),
             Self::EncodingSa(value)
             | Self::IcvLen(value)
             | Self::Protect(value)
@@ -414,22 +372,19 @@ impl Nla for MacsecSecyAttribute {
             | Self::Encrypt(value)
             | Self::IncSci(value)
             | Self::Es(value)
-            | Self::Scb(value) => buffer[0] = *value,
-            Self::Window(value) => emit_u32(buffer, *value).unwrap(),
-            Self::CipherSuite(value) => {
-                emit_u64(buffer, (*value).into()).unwrap()
-            }
-            Self::Validate(value) => buffer[0] = (*value).into(),
+            | Self::Scb(value) => out.push(*value),
+            Self::Window(value) => append_u32(out, *value),
+            Self::CipherSuite(value) => append_u64(out, (*value).into()),
+            Self::Validate(value) => out.push((*value).into()),
             Self::Pad => (),
-            Self::Other(nla) => nla.emit_value(buffer),
+            Self::Other(nla) => return nla.emit_value(out),
         }
+        Ok(())
     }
 }
 
-impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
-    for MacsecSecyAttribute
-{
-    fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
+impl<'a> Parseable<NlaBuffer<'a>> for MacsecSecyAttribute {
+    fn parse(buf: &NlaBuffer<'a>) -> Result<Self, DecodeError> {
         let payload = buf.value();
         Ok(match buf.kind() {
             MACSEC_SECY_ATTR_SCI => Self::Sci(
@@ -509,17 +464,6 @@ pub enum MacsecRxscAttribute {
 }
 
 impl Nla for MacsecRxscAttribute {
-    fn value_len(&self) -> usize {
-        match self {
-            Self::Sci(_) => 8,
-            Self::Active(_) => 1,
-            Self::SaList(list) => list.as_slice().buffer_len(),
-            Self::Stats(attrs) => attrs.as_slice().buffer_len(),
-            Self::Pad => 0,
-            Self::Other(nla) => nla.value_len(),
-        }
-    }
-
     fn kind(&self) -> u16 {
         match self {
             Self::Sci(_) => MACSEC_RXSC_ATTR_SCI,
@@ -531,22 +475,21 @@ impl Nla for MacsecRxscAttribute {
         }
     }
 
-    fn emit_value(&self, buffer: &mut [u8]) {
+    fn emit_value(&self, out: &mut Vec<u8>) -> Result<(), EncodeError> {
         match self {
-            Self::Sci(value) => emit_u64_be(buffer, *value).unwrap(),
-            Self::Active(value) => buffer[0] = *value,
-            Self::SaList(list) => list.as_slice().emit(buffer),
-            Self::Stats(attrs) => attrs.as_slice().emit(buffer),
+            Self::Sci(value) => append_u64_be(out, *value),
+            Self::Active(value) => out.push(*value),
+            Self::SaList(list) => list.as_slice().emit(out)?,
+            Self::Stats(attrs) => attrs.as_slice().emit(out)?,
             Self::Pad => (),
-            Self::Other(nla) => nla.emit_value(buffer),
+            Self::Other(nla) => return nla.emit_value(out),
         }
+        Ok(())
     }
 }
 
-impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
-    for MacsecRxscAttribute
-{
-    fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
+impl<'a> Parseable<NlaBuffer<'a>> for MacsecRxscAttribute {
+    fn parse(buf: &NlaBuffer<'a>) -> Result<Self, DecodeError> {
         let payload = buf.value();
         Ok(match buf.kind() {
             MACSEC_RXSC_ATTR_SCI => Self::Sci(
@@ -596,20 +539,6 @@ pub enum MacsecSaAttribute {
 }
 
 impl Nla for MacsecSaAttribute {
-    fn value_len(&self) -> usize {
-        match self {
-            Self::An(_) | Self::Active(_) => 1,
-            Self::Pn32(_) | Self::Ssci(_) => 4,
-            Self::Pn64(_) => 8,
-            Self::Key(value) | Self::KeyId(value) | Self::Salt(value) => {
-                value.len()
-            }
-            Self::Stats(attrs) => attrs.as_slice().buffer_len(),
-            Self::Pad => 0,
-            Self::Other(nla) => nla.value_len(),
-        }
-    }
-
     fn kind(&self) -> u16 {
         match self {
             Self::An(_) => MACSEC_SA_ATTR_AN,
@@ -625,26 +554,25 @@ impl Nla for MacsecSaAttribute {
         }
     }
 
-    fn emit_value(&self, buffer: &mut [u8]) {
+    fn emit_value(&self, out: &mut Vec<u8>) -> Result<(), EncodeError> {
         match self {
-            Self::An(value) | Self::Active(value) => buffer[0] = *value,
-            Self::Pn32(value) => emit_u32(buffer, *value).unwrap(),
-            Self::Pn64(value) => emit_u64(buffer, *value).unwrap(),
+            Self::An(value) | Self::Active(value) => out.push(*value),
+            Self::Pn32(value) => append_u32(out, *value),
+            Self::Pn64(value) => append_u64(out, *value),
             Self::Key(value) | Self::KeyId(value) | Self::Salt(value) => {
-                buffer[..value.len()].copy_from_slice(value)
+                append_bytes(out, value);
             }
-            Self::Stats(attrs) => attrs.as_slice().emit(buffer),
+            Self::Stats(attrs) => attrs.as_slice().emit(out)?,
             Self::Pad => (),
-            Self::Ssci(value) => emit_u32_be(buffer, *value).unwrap(),
-            Self::Other(nla) => nla.emit_value(buffer),
+            Self::Ssci(value) => append_u32_be(out, *value),
+            Self::Other(nla) => return nla.emit_value(out),
         }
+        Ok(())
     }
 }
 
-impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
-    for MacsecSaAttribute
-{
-    fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
+impl<'a> Parseable<NlaBuffer<'a>> for MacsecSaAttribute {
+    fn parse(buf: &NlaBuffer<'a>) -> Result<Self, DecodeError> {
         let payload = buf.value();
         Ok(match buf.kind() {
             MACSEC_SA_ATTR_AN => Self::An(
@@ -694,14 +622,6 @@ pub enum MacsecOffloadAttribute {
 }
 
 impl Nla for MacsecOffloadAttribute {
-    fn value_len(&self) -> usize {
-        match self {
-            Self::Type(_) => 1,
-            Self::Pad => 0,
-            Self::Other(nla) => nla.value_len(),
-        }
-    }
-
     fn kind(&self) -> u16 {
         match self {
             Self::Type(_) => MACSEC_OFFLOAD_ATTR_TYPE,
@@ -710,19 +630,18 @@ impl Nla for MacsecOffloadAttribute {
         }
     }
 
-    fn emit_value(&self, buffer: &mut [u8]) {
+    fn emit_value(&self, out: &mut Vec<u8>) -> Result<(), EncodeError> {
         match self {
-            Self::Type(value) => buffer[0] = (*value).into(),
+            Self::Type(value) => out.push((*value).into()),
             Self::Pad => (),
-            Self::Other(nla) => nla.emit_value(buffer),
+            Self::Other(nla) => return nla.emit_value(out),
         }
+        Ok(())
     }
 }
 
-impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
-    for MacsecOffloadAttribute
-{
-    fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
+impl<'a> Parseable<NlaBuffer<'a>> for MacsecOffloadAttribute {
+    fn parse(buf: &NlaBuffer<'a>) -> Result<Self, DecodeError> {
         let payload = buf.value();
         Ok(match buf.kind() {
             MACSEC_OFFLOAD_ATTR_TYPE => Self::Type(
@@ -756,13 +675,6 @@ macro_rules! stats_attribute {
         }
 
         impl Nla for $name {
-            fn value_len(&self) -> usize {
-                match self {
-                    $(Self::$variant(_) => $width,)+
-                    Self::Other(nla) => nla.value_len(),
-                }
-            }
-
             fn kind(&self) -> u16 {
                 match self {
                     $(Self::$variant(_) => $kind,)+
@@ -770,29 +682,32 @@ macro_rules! stats_attribute {
                 }
             }
 
-            fn emit_value(&self, buffer: &mut [u8]) {
+            fn emit_value(
+                &self,
+                out: &mut Vec<u8>,
+            ) -> Result<(), EncodeError> {
                 match self {
                     $(Self::$variant(value) => {
                         if $width == 4 {
-                            emit_u32(
-                                buffer,
-                                u32::try_from(*value)
-                                    .expect("statistics value exceeds u32"),
-                            )
-                            .unwrap();
+                            let value = u32::try_from(*value).map_err(|_| {
+                                EncodeError::new(
+                                    EncodeErrorKind::InvalidValue,
+                                    "statistics value exceeds u32",
+                                )
+                            })?;
+                            append_u32(out, value);
                         } else {
-                            emit_u64(buffer, *value).unwrap();
+                            append_u64(out, *value);
                         }
                     })+
-                    Self::Other(nla) => nla.emit_value(buffer),
+                    Self::Other(nla) => return nla.emit_value(out),
                 }
+                Ok(())
             }
         }
 
-        impl<'a, T: AsRef<[u8]> + ?Sized> Parseable<NlaBuffer<&'a T>>
-            for $name
-        {
-            fn parse(buf: &NlaBuffer<&'a T>) -> Result<Self, DecodeError> {
+        impl<'a> Parseable<NlaBuffer<'a>> for $name {
+            fn parse(buf: &NlaBuffer<'a>) -> Result<Self, DecodeError> {
                 let payload = buf.value();
                 Ok(match buf.kind() {
                     $($kind => Self::$variant(

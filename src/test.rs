@@ -19,9 +19,9 @@ fn assert_parse_and_emit(raw: &[u8], expected: &MacsecMessage) {
         expected
     );
 
-    let mut buffer = vec![0; expected.buffer_len() + 4];
-    header.emit(&mut buffer);
-    expected.emit(&mut buffer[4..]);
+    let mut buffer = Vec::new();
+    header.emit(&mut buffer).unwrap();
+    expected.emit(&mut buffer).unwrap();
     assert_eq!(&buffer, &raw);
 }
 
@@ -91,9 +91,9 @@ fn test_parse_kernel_reply() {
     let message = MacsecMessage::parse_with_param(&raw[4..], header).unwrap();
     assert_eq!(message.cmd, MacsecCmd::GetTxsc);
 
-    let mut emitted = vec![0; message.buffer_len() + 4];
-    header.emit(&mut emitted);
-    message.emit(&mut emitted[4..]);
+    let mut emitted = Vec::new();
+    header.emit(&mut emitted).unwrap();
+    message.emit(&mut emitted).unwrap();
     assert_eq!(emitted, raw);
 }
 
@@ -129,13 +129,14 @@ fn test_emit_add_txsa() {
         ],
     };
 
-    let mut buffer = vec![0; message.buffer_len() + 4];
+    let mut buffer = Vec::new();
     GenlHeader {
         cmd: message.command(),
         version: message.version(),
     }
-    .emit(&mut buffer);
-    message.emit(&mut buffer[4..]);
+    .emit(&mut buffer)
+    .unwrap();
+    message.emit(&mut buffer).unwrap();
 
     let header = GenlHeader::parse(&buffer).unwrap();
     let parsed = MacsecMessage::parse_with_param(&buffer[4..], header).unwrap();
@@ -152,13 +153,14 @@ fn test_emit_add_rxsc() {
         ])],
     };
 
-    let mut buffer = vec![0; message.buffer_len() + 4];
+    let mut buffer = Vec::new();
     GenlHeader {
         cmd: message.command(),
         version: message.version(),
     }
-    .emit(&mut buffer);
-    message.emit(&mut buffer[4..]);
+    .emit(&mut buffer)
+    .unwrap();
+    message.emit(&mut buffer).unwrap();
 
     let header = GenlHeader::parse(&buffer).unwrap();
     let parsed = MacsecMessage::parse_with_param(&buffer[4..], header).unwrap();
@@ -177,13 +179,14 @@ fn test_emit_offload() {
         ],
     };
 
-    let mut buffer = vec![0; message.buffer_len() + 4];
+    let mut buffer = Vec::new();
     GenlHeader {
         cmd: message.command(),
         version: message.version(),
     }
-    .emit(&mut buffer);
-    message.emit(&mut buffer[4..]);
+    .emit(&mut buffer)
+    .unwrap();
+    message.emit(&mut buffer).unwrap();
 
     let header = GenlHeader::parse(&buffer).unwrap();
     let parsed = MacsecMessage::parse_with_param(&buffer[4..], header).unwrap();

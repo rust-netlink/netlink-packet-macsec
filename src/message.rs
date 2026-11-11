@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 
-use netlink_packet_core::{DecodeError, Emitable, ParseableParametrized};
+use netlink_packet_core::{
+    DecodeError, Emitable, EncodeError, ParseableParametrized,
+};
 use netlink_packet_generic::{GenlFamily, GenlHeader};
 
 use crate::{MacsecAttribute, attribute::parse_attributes};
@@ -107,12 +109,8 @@ impl GenlFamily for MacsecMessage {
 }
 
 impl Emitable for MacsecMessage {
-    fn emit(&self, buffer: &mut [u8]) {
-        self.attributes.as_slice().emit(buffer)
-    }
-
-    fn buffer_len(&self) -> usize {
-        self.attributes.as_slice().buffer_len()
+    fn emit_value(&self, out: &mut Vec<u8>) -> Result<(), EncodeError> {
+        self.attributes.as_slice().emit(out)
     }
 }
 
